@@ -67,6 +67,12 @@ typedef unsigned short UTF16;       ///< Compiler independent 16 bit Unicode enc
 
 typedef unsigned int   UTF32;       ///< Compiler independent 32 bit Unicode encoded character
 
+struct UTF16Pair
+{
+   U32 high;
+   U32 low;
+};
+
 typedef const char* StringTableEntry;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////

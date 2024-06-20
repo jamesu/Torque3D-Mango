@@ -171,13 +171,25 @@ U32 convertUTF8toUTF16N(const UTF8 *unistring, UTF16 *outbuffer, U32 len)
    UTF32 middleman;
    
    nCodepoints=0;
-   while(*unistring != '\0' && nCodepoints < len)
+   while (*unistring != '\0' && nCodepoints < len)
    {
       walked = 1;
-      middleman = oneUTF8toUTF32(unistring,&walked);
-      outbuffer[nCodepoints] = oneUTF32toUTF16(middleman);
-      unistring+=walked;
-      nCodepoints++;
+      middleman = oneUTF8toUTF32(unistring, &walked);
+      UTF16Pair outPair = oneUTF32toUTF16(middleman);
+      if (outPair.low == 0)
+      {
+         outbuffer[nCodepoints++] = outPair.high;
+      }
+      else if (nCodepoints + 1 >= len)
+      {
+         outbuffer[nCodepoints++] = kReplacementChar;
+      }
+      else
+      {
+         outbuffer[nCodepoints++] = outPair.high;
+         outbuffer[nCodepoints++] = outPair.low;
+      }
+      unistring += walked;
    }
 
    nCodepoints = getMin(nCodepoints,len - 1);
@@ -273,7 +285,7 @@ UTF8*  createUTF8string( const UTF16* unistring)
    PROFILE_SCOPE(createUTF8string);
 
    // allocate plenty of memory.
-   U32 nCodeunits, len = dStrlen(unistring) * 3 + 1;
+   U32 nCodeunits, len = dStrlen(unistring) * 4 + 1;
    FrameTemp<UTF8> buf(len);
       
    // perform conversion
@@ -357,12 +369,6 @@ UTF32 oneUTF8toUTF32( const UTF8* codepoint, U32 *unitsWalked)
    // codepoints in the surrogate range are illegal, and should be replaced.
    if(isSurrogateRange(ret))
       ret = kReplacementChar;
-   
-   // codepoints outside the Basic Multilingual Plane add complexity to our UTF16 string classes,
-   // we've read them correctly so they won't foul the byte stream,
-   // but we kill them here to make sure they wont foul anything else
-   if(isAboveBMP(ret))
-      ret = kReplacementChar;
 
    return ret;
 }
@@ -415,74 +421,80 @@ UTF32  oneUTF16toUTF32(const UTF16* codepoint, U32 *unitsWalked)
    if(isSurrogateRange(ret))
       ret = kReplacementChar;
 
-   // codepoints outside the Basic Multilingual Plane add complexity to our UTF16 string classes,
-   // we've read them correctly so they wont foul the byte stream,
-   // but we kill them here to make sure they wont foul anything else
-   // NOTE: these are perfectly legal codepoints, we just dont want to deal with them.
-   if(isAboveBMP(ret))
-      ret = kReplacementChar;
-
    PROFILE_END();
    return ret;
 }
 
 //-----------------------------------------------------------------------------
-UTF16 oneUTF32toUTF16(const UTF32 codepoint)
+UTF16Pair oneUTF32toUTF16(const UTF32 codepoint)
 {
    // found a codepoint outside the encodable UTF-16 range!
    // or, found an illegal codepoint!
    if(codepoint >= 0x10FFFF || isSurrogateRange(codepoint))
-      return kReplacementChar;
-   
-   // these are legal, we just don't want to deal with them.
-   if(isAboveBMP(codepoint))
-      return kReplacementChar;
+      return { kReplacementChar, 0 };
 
-   return (UTF16)codepoint;
+   UTF16Pair result;
+
+   if (!isAboveBMP(codepoint))
+   {
+      result.high = (UTF16)codepoint;
+      result.low = 0;
+   }
+   else
+   {
+      UTF32 working = codepoint - 0x10000;
+      result.high = (UTF16)((working >> 10) + 0xD800);
+      result.low = (UTF16)((working & 0x3FF) + 0xDC00);
+   }
+
+   return result;
 }
 
 //-----------------------------------------------------------------------------
-U32 oneUTF32toUTF8(const UTF32 codepoint, UTF8 *threeByteCodeunitBuf)
+U32 oneUTF32toUTF8(const UTF32 codepoint, UTF8 * fourByteCodeunitBuf)
 {
    PROFILE_START(oneUTF32toUTF8);
    U32 bytecount = 0;
-   UTF8 *buf;
+   UTF8* buf;
    U32 working = codepoint;
-   buf = threeByteCodeunitBuf;
+   buf = fourByteCodeunitBuf;
 
    //-----------------
-   if(isSurrogateRange(working))  // found an illegal codepoint!
+   if (isSurrogateRange(working))  // found an illegal codepoint!
       working = kReplacementChar;
    
-   if(isAboveBMP(working))        // these are legal, we just dont want to deal with them.
+
+   if (working > 0x10FFFF)         // code point out of Unicode range
       working = kReplacementChar;
 
-   //-----------------
-   if( working < (1 << 7))        // codeable in 7 bits
+//-----------------
+   if (working < (1 << 7))        // codeable in 7 bits
       bytecount = 1;
-   else if( working < (1 << 11))  // codeable in 11 bits
+   else if (working < (1 << 11))  // codeable in 11 bits
       bytecount = 2;
-   else if( working < (1 << 16))  // codeable in 16 bits
+   else if (working < (1 << 16))  // codeable in 16 bits
       bytecount = 3;
+   else if (working < (1 << 21))  // codeable in 21 bits
+      bytecount = 4;
 
-   AssertISV( bytecount > 0, "Error converting to UTF-8 in oneUTF32toUTF8(). isAboveBMP() should have caught this!");
+   AssertISV(bytecount > 0, "Error converting to UTF-8 in oneUTF32toUTF8().");
 
    //-----------------
    U8  mask = sgByteMask8LUT[0];            // 0011 1111
    U8  marker = ( ~static_cast<U32>(mask) << 1u);            // 1000 0000
-   
+
    // Process the low order bytes, shifting the codepoint down 6 each pass.
    for( S32 i = bytecount-1; i > 0; i--)
    {
-      threeByteCodeunitBuf[i] = marker | (working & mask); 
+      fourByteCodeunitBuf[i] = marker | (working & mask);
       working >>= 6;
    }
 
    // Process the 1st byte. filter based on the # of expected bytes.
    mask = sgByteMask8LUT[bytecount];
-   marker = ( ~mask << 1 );
-   threeByteCodeunitBuf[0] = marker | (working & mask);
-   
+   marker = (~mask << 1);
+   fourByteCodeunitBuf[0] = marker | (working & mask);
+
    PROFILE_END();
    return bytecount;
 }
@@ -566,89 +578,58 @@ const UTF8* getNthCodepoint(const UTF8 *unistring, const U32 n)
    return ret;
 }
 
-/* alternate utf-8 decode impl for speed, no error checking, 
-   left here for your amusement:
-   
-   U32 codeunit = codepoint + expectedByteCount - 1;
-   U32 i = 0;
-   switch(expectedByteCount)
-   {
-      case 6: ret |= ( *(codeunit--) & 0x3f ); i++;            
-      case 5: ret |= ( *(codeunit--) & 0x3f ) << (6 * i++);    
-      case 4: ret |= ( *(codeunit--) & 0x3f ) << (6 * i++);    
-      case 3: ret |= ( *(codeunit--) & 0x3f ) << (6 * i++);    
-      case 2: ret |= ( *(codeunit--) & 0x3f ) << (6 * i++);    
-      case 1: ret |= *(codeunit) & byteMask8LUT[expectedByteCount] << (6 * i);
-   }
-*/
-
 //------------------------------------------------------------------------------
 // Byte Order Mark functions
 
 bool chompUTF8BOM( const char *inString, char **outStringPtr )
 {
-   *outStringPtr = const_cast<char *>( inString );
+   *outStringPtr = const_cast<char*>( inString );
 
-   bool valid = false;
-   if (inString[0] && inString[1] && inString[2])
-   {
-      U8 bom[4];
-      dMemcpy(bom, inString, 4);
-      valid = isValidUTF8BOM(bom);
-   }
+   U8 bom[4];
+   dMemcpy(bom, inString, 4);
 
-   // This is hackey, but I am not sure the best way to do it at the present.
-   // The only valid BOM is a UTF8 BOM, which is 3 bytes, even though we read
-   // 4 bytes because it could possibly be a UTF32 BOM, and we want to provide
-   // an accurate error message. Perhaps this could be re-worked when more UTF
-   // formats are supported to have isValidBOM return the size of the BOM, in
-   // bytes.
-   if( valid )
-      (*outStringPtr) += 3; // SEE ABOVE!! -pw
+   U8 bomSkip = isValidUTF8BOM(bom);
+   (*outStringPtr) += bomSkip;
 
-   return valid;
+   return bomSkip > 0;
 }
 
-bool isValidUTF8BOM( U8 bom[4] )
+U8 isValidUTF8BOM( U8 bom[4] )
 {
    // Is it a BOM?
-   if( bom[0] == 0 )
+   if (bom[0] == 0)
    {
       // Could be UTF32BE
-      if( bom[1] == 0 && bom[2] == 0xFE && bom[3] == 0xFF )
+      if (bom[1] == 0 && bom[2] == 0xFE && bom[3] == 0xFF)
       {
-         Con::warnf( "Encountered a UTF32 BE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
-         return false;
+         Con::warnf("Encountered a UTF32 BE BOM in this file; Torque does NOT support this file encoding. Use UTF8!");
+         return 0;
       }
 
-      return false;
+      return 0;
    }
-   else if( bom[0] == 0xFF )
+   else if (bom[0] == 0xFF)
    {
       // It's little endian, either UTF16 or UTF32
-      if( bom[1] == 0xFE )
+      if (bom[1] == 0xFE)
       {
-         if( bom[2] == 0 && bom[3] == 0 )
-            Con::warnf( "Encountered a UTF32 LE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
+         if (bom[2] == 0 && bom[3] == 0)
+            Con::warnf("Encountered a UTF32 LE BOM in this file; Torque does NOT support this file encoding. Use UTF8!");
          else
-            Con::warnf( "Encountered a UTF16 LE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
+            Con::warnf("Encountered a UTF16 LE BOM in this file; Torque does NOT support this file encoding. Use UTF8!");
       }
 
-      return false;
+      return 0;
    }
-   else if( bom[0] == 0xFE && bom[1] == 0xFF )
+   else if (bom[0] == 0xFE && bom[1] == 0xFF)
    {
-      Con::warnf( "Encountered a UTF16 BE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
-      return false;
+      Con::warnf("Encountered a UTF16 BE BOM in this file; Torque does NOT support this file encoding. Use UTF8!");
+      return 0;
    }
-   else if( bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF )
+   else if (bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
    {
-      // Can enable this if you want -pw
-      //Con::printf("Encountered a UTF8 BOM. Torque supports this.");
-      return true;
+      return 3;
    }
 
-   // Don't print out an error message here, because it will try this with
-   // every script. -pw
-   return false;
+   return 0;
 }
