@@ -39,6 +39,7 @@
 //-----------------------------------------------------------------------------
 /// replacement character. Standard correct value is 0xFFFD.
 #define kReplacementChar 0xFFFD
+#define MAX_UTF8_LEN 4
 
 /// Look up table. Shift a byte >> 1, then look up how many bytes to expect after it.
 /// Contains -1's for illegal values.
@@ -139,17 +140,6 @@ static UTF16CacheTable sgUTF16Cache;
 #endif // TORQUE_ENABLE_UTF16_CACHE
 
 //-----------------------------------------------------------------------------
-inline bool isSurrogateRange(U32 codepoint)
-{
-   return ( 0xd800 < codepoint && codepoint < 0xdfff );
-}
-
-inline bool isAboveBMP(U32 codepoint)
-{
-   return ( codepoint > 0xFFFF );
-}
-
-//-----------------------------------------------------------------------------
 U32 convertUTF8toUTF16N(const UTF8 *unistring, UTF16 *outbuffer, U32 len)
 {
    AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
@@ -206,6 +196,85 @@ U32 convertUTF8toUTF16N(const UTF8 *unistring, UTF16 *outbuffer, U32 len)
 }
 
 //-----------------------------------------------------------------------------
+U32 convertUTF32toUTF8N(const UTF32* unistring, UTF8* outbuffer, U32 len)
+{
+   AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
+   PROFILE_SCOPE(convertUTF32toUTF8);
+   U32 nCodeunits, codeunitLen;
+
+   nCodeunits = 0;
+   while (*unistring != '\0' && nCodeunits + MAX_UTF8_LEN < len)
+   {
+      codeunitLen = oneUTF32toUTF8(*unistring++, &outbuffer[nCodeunits]);
+      unistring++;
+      nCodeunits += codeunitLen;
+   }
+
+   nCodeunits = getMin(nCodeunits, len - 1);
+   outbuffer[nCodeunits] = '\0';
+
+   return nCodeunits;
+}
+
+
+//-----------------------------------------------------------------------------
+U32 convertUTF32toUTF16N(const UTF32* unistring, UTF16* outbuffer, U32 len)
+{
+   AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
+   PROFILE_SCOPE(convertUTF32toUTF16);
+
+   // TODO: cache
+
+   U32 nCodepoints = 0;
+
+   while (*unistring != '\0' && nCodepoints < len)
+   {
+      UTF16Pair outPair = oneUTF32toUTF16(*unistring++);
+      if (outPair.low == 0)
+      {
+         outbuffer[nCodepoints++] = outPair.high;
+      }
+      else if (nCodepoints + 1 >= len)
+      {
+         outbuffer[nCodepoints++] = kReplacementChar;
+      }
+      else
+      {
+         outbuffer[nCodepoints++] = outPair.high;
+         outbuffer[nCodepoints++] = outPair.low;
+      }
+      unistring++;
+   }
+
+   nCodepoints = getMin(nCodepoints, len - 1);
+   outbuffer[nCodepoints] = '\0';
+
+   return nCodepoints;
+}
+
+//-----------------------------------------------------------------------------
+U32 convertUTF8toUTF32N(const UTF8* unistring, UTF32* outbuffer, U32 len)
+{
+   AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
+   PROFILE_SCOPE(convertUTF8toUTF32);
+   U32 walked, nCodepoints;
+
+   nCodepoints = 0;
+   while (*unistring != 0 && nCodepoints < len)
+   {
+      walked = 1;
+      outbuffer[nCodepoints] = oneUTF8toUTF32(unistring, &walked);
+      unistring += walked;
+      nCodepoints++;
+   }
+
+   nCodepoints = getMin(nCodepoints, len - 1);
+   outbuffer[nCodepoints] = '\0';
+
+   return nCodepoints;
+}
+
+//-----------------------------------------------------------------------------
 U32 convertUTF16toUTF8N( const UTF16 *unistring, UTF8  *outbuffer, U32 len)
 {
    AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
@@ -214,7 +283,7 @@ U32 convertUTF16toUTF8N( const UTF16 *unistring, UTF8  *outbuffer, U32 len)
    UTF32 middleman;
    
    nCodeunits=0;
-   while( *unistring != '\0' && nCodeunits + 3 < len )
+   while( *unistring != '\0' && nCodeunits + MAX_UTF8_LEN < len )
    {
       walked = 1;
       middleman  = oneUTF16toUTF32(unistring,&walked);
@@ -230,6 +299,29 @@ U32 convertUTF16toUTF8N( const UTF16 *unistring, UTF8  *outbuffer, U32 len)
    return nCodeunits;
 }
 
+//-----------------------------------------------------------------------------
+U32 convertUTF16toUTF32N(const UTF16* unistring, UTF32* outbuffer, U32 len)
+{
+   AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
+   PROFILE_START(convertUTF16toUTF32);
+   U32 walked, nCodeunits;
+
+   nCodeunits = 0;
+   while (*unistring != '\0' && nCodeunits + MAX_UTF8_LEN < len)
+   {
+      walked = 1;
+      outbuffer[nCodeunits++] = oneUTF16toUTF32(unistring, &walked);
+      unistring += walked;
+   }
+
+   nCodeunits = getMin(nCodeunits, len - 1);
+   outbuffer[nCodeunits] = '\0';
+
+   PROFILE_END();
+   return nCodeunits;
+}
+
+//-----------------------------------------------------------------------------
 U32 convertUTF16toUTF8DoubleNULL( const UTF16 *unistring, UTF8  *outbuffer, U32 len)
 {
    AssertFatal(len >= 1, "Buffer for unicode conversion must be large enough to hold at least the null terminator.");
@@ -238,7 +330,7 @@ U32 convertUTF16toUTF8DoubleNULL( const UTF16 *unistring, UTF8  *outbuffer, U32 
    UTF32 middleman;
 
    nCodeunits=0;
-   while( ! (*unistring == '\0' && *(unistring + 1) == '\0') && nCodeunits + 3 < len )
+   while( ! (*unistring == '\0' && *(unistring + 1) == '\0') && nCodeunits + MAX_UTF8_LEN < len )
    {
       walked = 1;
       middleman  = oneUTF16toUTF32(unistring,&walked);
@@ -258,6 +350,48 @@ U32 convertUTF16toUTF8DoubleNULL( const UTF16 *unistring, UTF8  *outbuffer, U32 
 //-----------------------------------------------------------------------------
 // Functions that convert buffers of unicode code points
 //-----------------------------------------------------------------------------
+UTF32* createUTF32String(const UTF8* unistring)
+{
+   PROFILE_SCOPE(createUTF32string);
+
+   // allocate plenty of memory.
+   U32 nCodepoints, len = dStrlen(unistring) + 1;
+   FrameTemp<UTF32> buf(len);
+
+   // perform conversion
+   nCodepoints = convertUTF8toUTF32N(unistring, buf, len);
+
+   // add 1 for the NULL terminator the converter promises it included.
+   nCodepoints++;
+
+   // allocate the return buffer, copy over, and return it.
+   UTF32* ret = new UTF32[nCodepoints];
+   dCopyArray(ret, buf.address(), nCodepoints);
+
+   return ret;
+}
+
+UTF32* createUTF32String(const UTF16* unistring)
+{
+   PROFILE_SCOPE(createUTF32string);
+
+   // allocate plenty of memory.
+   U32 nCodepoints, len = dStrlen(unistring) + 1;
+   FrameTemp<UTF32> buf(len);
+
+   // perform conversion
+   nCodepoints = convertUTF16toUTF32N(unistring, buf, len);
+
+   // add 1 for the NULL terminator the converter promises it included.
+   nCodepoints++;
+
+   // allocate the return buffer, copy over, and return it.
+   UTF32* ret = new UTF32[nCodepoints];
+   dCopyArray(ret, buf.address(), nCodepoints);
+
+   return ret;
+}
+
 UTF16* createUTF16string( const UTF8* unistring)
 {
    PROFILE_SCOPE(createUTF16string);
@@ -274,8 +408,29 @@ UTF16* createUTF16string( const UTF8* unistring)
    
    // allocate the return buffer, copy over, and return it.
    UTF16 *ret = new UTF16[nCodepoints];
-   dMemcpy(ret, buf, nCodepoints * sizeof(UTF16));
+   dCopyArray(ret, buf.address(), nCodepoints);
    
+   return ret;
+}
+
+UTF16* createUTF16string(const UTF32* unistring)
+{
+   PROFILE_SCOPE(createUTF16string);
+
+   // allocate plenty of memory.
+   U32 nCodepoints, len = dStrlen(unistring) + 1;
+   FrameTemp<UTF16> buf(len);
+
+   // perform conversion
+   nCodepoints = convertUTF32toUTF16N(unistring, buf, len);
+
+   // add 1 for the NULL terminator the converter promises it included.
+   nCodepoints++;
+
+   // allocate the return buffer, copy over, and return it.
+   UTF16* ret = new UTF16[nCodepoints];
+   dCopyArray(ret, buf.address(), nCodepoints);
+
    return ret;
 }
 
@@ -296,7 +451,28 @@ UTF8*  createUTF8string( const UTF16* unistring)
    
    // allocate the return buffer, copy over, and return it.
    UTF8 *ret = new UTF8[nCodeunits];
-   dMemcpy(ret, buf, nCodeunits * sizeof(UTF8));
+   dCopyArray(ret, buf.address(), nCodeunits);
+
+   return ret;
+}
+
+UTF8* createUTF8string(const UTF32* unistring)
+{
+   PROFILE_SCOPE(createUTF8string);
+
+   // allocate plenty of memory.
+   U32 nCodeunits, len = dStrlen(unistring) * 4 + 1;
+   FrameTemp<UTF8> buf(len);
+
+   // perform conversion
+   nCodeunits = convertUTF32toUTF8N(unistring, buf, len);
+
+   // add 1 for the NULL terminator the converter promises it included.
+   nCodeunits++;
+
+   // allocate the return buffer, copy over, and return it.
+   UTF8* ret = new UTF8[nCodeunits];
+   dCopyArray(ret, buf.address(), nCodeunits);
 
    return ret;
 }
@@ -500,67 +676,230 @@ U32 oneUTF32toUTF8(const UTF32 codepoint, UTF8 * fourByteCodeunitBuf)
 }
 
 //-----------------------------------------------------------------------------
-U32 dStrlen(const UTF16 *unistring)
+template<typename T> static inline U32 tplStrLen(T* unistring)
 {
-   if(!unistring)
+   if (!unistring)
       return 0;
 
    U32 i = 0;
-   while(unistring[i] != '\0')
+   while (unistring[i] != '\0')
       i++;
-      
-//   AssertFatal( wcslen(unistring) == i, "Incorrect length" );
 
    return i;
 }
 
 //-----------------------------------------------------------------------------
-U32 dStrlen(const UTF32 *unistring)
+template<typename T> static inline T* tplStrrchr(T* unistring, U32 c)
 {
-   U32 i = 0;
-   while(unistring[i] != '\0')
-      i++;
-      
-   return i;
-}
+   if (!unistring) return NULL;
 
-//-----------------------------------------------------------------------------
-
-const UTF16* dStrrchr(const UTF16* unistring, U32 c)
-{
-   if(!unistring) return NULL;
-
-   const UTF16* tmp = unistring + dStrlen(unistring);
-   while( tmp >= unistring)
-   { 
-      if(*tmp == c)
+   T* tmp = unistring + dStrlen(unistring);
+   while (tmp >= unistring)
+   {
+      if (*tmp == c)
          return tmp;
       tmp--;
    }
    return NULL;
 }
 
-UTF16* dStrrchr(UTF16* unistring, U32 c)
+//-----------------------------------------------------------------------------
+template<typename T> static inline T* tplStrchr(T* unistring, U32 c)
 {
-   const UTF16* str = unistring;
-   return const_cast<UTF16*>(dStrrchr(str, c));
-}
+   if (!unistring) return NULL;
+   T* tmp = unistring;
 
-const UTF16* dStrchr(const UTF16* unistring, U32 c)
-{
-   if(!unistring) return NULL;
-   const UTF16* tmp = unistring;
-   
-   while ( *tmp  && *tmp != c)
+   while (*tmp && *tmp != c)
       tmp++;
 
    return  (*tmp == c) ? tmp : NULL;
 }
 
+//-----------------------------------------------------------------------------
+template<typename T, bool I> static inline S32 tplStrcmp(T* s1, T* s2)
+{
+   dsize_t i = 0;
+   while (s1[i] && s2[i])
+   {
+      U32 c1 = s1[i];
+      U32 c2 = s2[i];
+
+      if (I)
+      {
+         if (c1 >= U'A' && c1 <= U'Z') {
+            c1 += (U'a' - U'A');
+         }
+         if (c2 >= U'A' && c2 <= U'Z') {
+            c2 += (U'a' - U'A');
+         }
+      }
+
+      if (c1 != c2) {
+         return (c1 < c2) ? -1 : 1;
+      }
+      ++i;
+   }
+
+   if (s1[i]) {
+      return 1;
+   }
+
+   if (s2[i]) {
+      return -1;
+   }
+
+   return 0;
+}
+
+//-----------------------------------------------------------------------------
+template<typename T,bool I> static inline S32 tplStrncmp(T* s1, T* s2, dsize_t n)
+{
+   if (n == 0) {
+      return 0;
+   }
+
+   dsize_t i = 0;
+   while (i < n && s1[i] && s2[i]) {
+      U32 c1 = s1[i];
+      U32 c2 = s2[i];
+
+      if (I)
+      {
+         if (c1 >= U'A' && c1 <= U'Z') {
+            c1 += (U'a' - U'A');
+         }
+         if (c2 >= U'A' && c2 <= U'Z') {
+            c2 += (U'a' - U'A');
+         }
+      }
+
+      if (c1 != c2) {
+         return (c1 < c2) ? -1 : 1;
+      }
+      ++i;
+   }
+
+   if (i == n) {
+      return 0;
+   }
+
+   if (s1[i]) {
+      return 1;
+   }
+
+   if (s2[i]) {
+      return -1;
+   }
+
+   return 0;
+}
+
+//-----------------------------------------------------------------------------
+U32 dStrlen(const UTF16 *unistring)
+{
+   return tplStrLen(unistring);
+}
+
+//-----------------------------------------------------------------------------
+U32 dStrlen(const UTF32* unistring)
+{
+   return tplStrLen(unistring);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStrcmp(const UTF16* str1, const UTF16* str2)
+{
+   return tplStrcmp<const UTF16, false>(str1, str2);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStrcmp(const UTF32* str1, const UTF32* str2)
+{
+   return tplStrcmp<const UTF32, false>(str1, str2);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStricmp(const UTF16* str1, const UTF16* str2)
+{
+   return tplStrcmp<const UTF16, true>(str1, str2);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStricmp(const UTF32* str1, const UTF32* str2)
+{
+   return tplStrcmp<const UTF32, true>(str1, str2);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStrncmp(const UTF16* str1, const UTF16* str2, dsize_t len)
+{
+   return tplStrncmp<const UTF16, false>(str1, str2, len);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStrncmp(const UTF32* str1, const UTF32* str2, dsize_t len)
+{
+   return tplStrncmp<const UTF32, false>(str1, str2, len);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStrnicmp(const UTF16* str1, const UTF16* str2, dsize_t len)
+{
+   return tplStrncmp<const UTF16, true>(str1, str2, len);
+}
+
+//-----------------------------------------------------------------------------
+const S32 dStrnicmp(const UTF32* str1, const UTF32* str2, dsize_t len)
+{
+   return tplStrncmp<const UTF32, true>(str1, str2, len);
+}
+
+//-----------------------------------------------------------------------------
+const UTF16* dStrrchr(const UTF16* unistring, U32 c)
+{
+   return tplStrrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
+UTF16* dStrrchr(UTF16* unistring, U32 c)
+{
+   return tplStrrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
+const UTF16* dStrchr(const UTF16* unistring, U32 c)
+{
+   return tplStrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
 UTF16* dStrchr(UTF16* unistring, U32 c)
 {
-   const UTF16* str = unistring;
-   return const_cast<UTF16*>(dStrchr(str, c));
+   return tplStrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
+const UTF32* dStrrchr(const UTF32* unistring, U32 c)
+{
+   return tplStrrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
+UTF32* dStrrchr(UTF32* unistring, U32 c)
+{
+   return tplStrrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
+const UTF32* dStrchr(const UTF32* unistring, U32 c)
+{
+   return tplStrchr(unistring, c);
+}
+
+//-----------------------------------------------------------------------------
+UTF32* dStrchr(UTF32* unistring, U32 c)
+{
+   return tplStrchr(unistring, c);
 }
 
 //-----------------------------------------------------------------------------

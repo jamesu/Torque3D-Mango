@@ -255,7 +255,6 @@ extern char *dStrlwr(char *str);
 extern char* dStrichr( char* str, char ch );
 extern const char* dStrichr( const char* str, char ch );
 
-extern S32        dStrcmp(const UTF16 *str1, const UTF16 *str2);
 extern S32        dStrnatcmp( const char* str1, const char* str2 );
 extern S32        dStrnatcasecmp( const char* str1, const char* str2 );
 

@@ -62,9 +62,13 @@
 ///   calling delete[] on these buffers.
 /// - Because they allocate memory, do not use these functions in a tight loop.
 /// - These are useful when you need a new long term copy of a string.
-UTF16* createUTF16string( const UTF8 *unistring);
 
-UTF8*  createUTF8string( const UTF16 *unistring);
+UTF16* createUTF32string(const UTF8 *unistring);
+UTF16* createUTF32string(const UTF16 *unistring);
+UTF16* createUTF16string(const UTF8 *unistring);
+UTF16* createUTF16string(const UTF32 *unistring);
+UTF8*  createUTF8string(const UTF16 *unistring);
+UTF8*  createUTF8string(const UTF32 *unistring);
 
 //-----------------------------------------------------------------------------
 /// Functions that convert buffers of unicode code points, into a provided buffer.
@@ -79,9 +83,15 @@ UTF8*  createUTF8string( const UTF16 *unistring);
 /// - Output is null terminated. Be sure to provide 1 extra byte, U16 or U32 for
 ///   the null terminator, or you will see truncated output.
 /// - If the provided buffer is too small, the output will be truncated.
+//
+U32 convertUTF32toUTF8N(const UTF32 *unistring, UTF8 *outbuffer, U32 len);
+U32 convertUTF32toUTF16N(const UTF32 *unistring, UTF16 *outbuffer, U32 len);
+//
+U32 convertUTF16toUTF8N(const UTF16 *unistring, UTF8 *outbuffer, U32 len);
+U32 convertUTF16toUTF32N(const UTF16 *unistring, UTF32 *outbuffer, U32 len);
+//
+U32 convertUTF8toUTF32N(const UTF8 *unistring, UTF32 *outbuffer, U32 len);
 U32 convertUTF8toUTF16N(const UTF8 *unistring, UTF16 *outbuffer, U32 len);
-
-U32 convertUTF16toUTF8N( const UTF16 *unistring, UTF8  *outbuffer, U32 len);
 
 /// Safe conversion function for statically sized buffers.
 template <size_t N>
@@ -90,13 +100,72 @@ inline U32 convertUTF8toUTF16(const UTF8 *unistring, UTF16 (&outbuffer)[N])
    return convertUTF8toUTF16N(unistring, outbuffer, (U32) N);
 }
 
-/// Safe conversion function for statically sized buffers.
+template <size_t N>
+inline U32 convertUTF8toUTF32(const UTF8 *unistring, UTF32 (&outbuffer)[N])
+{
+   return convertUTF8toUTF32N(unistring, outbuffer, (U32) N);
+}
+
 template <size_t N>
 inline U32 convertUTF16toUTF8(const UTF16 *unistring, UTF8 (&outbuffer)[N])
 {
    return convertUTF16toUTF8N(unistring, outbuffer, (U32) N);
 }
 
+template <size_t N>
+inline U32 convertUTF16toUTF32(const UTF16 *unistring, UTF32 (&outbuffer)[N])
+{
+   return convertUTF16toUTF32N(unistring, outbuffer, (U32) N);
+}
+
+template <size_t N>
+inline U32 convertUTF32toUTF8(const UTF32 *unistring, UTF8 (&outbuffer)[N])
+{
+   return convertUTF32toUTF8N(unistring, outbuffer, (U32) N);
+}
+
+template <size_t N>
+inline U32 convertUTF32toUTF16(const UTF32 *unistring, UTF16 (&outbuffer)[N])
+{
+   return convertUTF32toUTF16N(unistring, outbuffer, (U32) N);
+}
+
+// Utils
+
+inline bool isSurrogateRange(U32 codepoint)
+{
+   return (0xd800 < codepoint && codepoint < 0xdfff);
+}
+
+inline bool isAboveBMP(U32 codepoint)
+{
+   return (codepoint > 0xFFFF);
+}
+
+inline bool isUControlCharacter(UTF32 c) {
+   return (c >= 0x0000 && c <= 0x001F) || // C0 Controls
+      (c >= 0x007F && c <= 0x009F) ||     // C1 Controls
+      (c >= 0x200B && c <= 0x200F) ||     // Formatting Characters
+      (c >= 0x202A && c <= 0x202E) ||     // Bidirectional Formatting Characters
+      (c == 0x00AD) ||                    // Soft Hyphen
+      (c == 0x2060);                      // Word Joiner
+}
+
+inline int isCombiningCharacter(U32 wc)
+{
+   return (wc >= 0x0300 && wc <= 0x036F) ||
+      (wc >= 0x1AB0 && wc <= 0x1AFF) ||
+      (wc >= 0x1DC0 && wc <= 0x1DFF) ||
+      (wc >= 0x20D0 && wc <= 0x20FF) ||
+      (wc >= 0xFE20 && wc <= 0xFE2F) ||  // BMP 
+      (wc >= 0x1AB0 && wc <= 0x1AFF) ||  // Combining Diacritical Marks Extended
+      (wc >= 0x1DC0 && wc <= 0x1DFF) ||  // Combining Diacritical Marks Supplement Extended
+      (wc >= 0x1D165 && wc <= 0x1D1AD);  // Combining Diacritical Marks Supplement
+}
+
+//
+
+//
 //-----------------------------------------------------------------------------
 /// Functions that converts one unicode codepoint at a time
 /// - Since these functions are designed to be used in tight loops, they do not
@@ -118,6 +187,18 @@ U32    oneUTF32toUTF8( const UTF32 codepoint, UTF8 *fourByteCodeunitBuf);
 ///   the behavior is undefined.
 U32 dStrlen(const UTF16 *unistring);
 U32 dStrlen(const UTF32 *unistring);
+
+//-----------------------------------------------------------------------------
+// Compare
+
+const S32 dStrcmp(const UTF16 *str1, const UTF16 *str2);
+const S32 dStrcmp(const UTF32 *str1, const UTF32 *str2);
+const S32 dStricmp(const UTF16* str1, const UTF16* str2);
+const S32 dStricmp(const UTF32* str1, const UTF32* str2);
+const S32 dStrncmp(const UTF16* str1, const UTF16* str2, dsize_t len);
+const S32 dStrncmp(const UTF32* str1, const UTF32* str2, dsize_t len);
+const S32 dStrnicmp(const UTF16* str1, const UTF16* str2, dsize_t len);
+const S32 dStrnicmp(const UTF32* str1, const UTF32* str2, dsize_t len);
 
 //-----------------------------------------------------------------------------
 /// Scanning for characters in unicode strings
